@@ -1,0 +1,19 @@
+{
+  "name": "hushpost",
+  "version": "0.0.0",
+  "description": "Send private messages",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:chroth/hushpost.git"
+  },
+  "author": "Christofer Roth <christofer@dorian.se> (http://www.dorian.se/)",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/chroth/hushpost/issues"
+  },
+  "homepage": "https://github.com/chroth/hushpost"
+}
