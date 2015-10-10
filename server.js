@@ -1,10 +1,21 @@
 var express = require('express');
 var app = express();
+var server = require('http').createServer(app);
 var uuid = require('node-uuid');
 var bodyParser = require('body-parser');
+var io = require('socket.io')(server);
+
 
 //
-// CONFIGURE
+// CONFIGURATION
+//
+var config = {
+  port: process.env.PORT || 3000,
+};
+
+
+//
+// MIDDLEWARE
 //
 
 // Parse body
@@ -17,6 +28,7 @@ app.use(function (req, res, next) {
   next();
 });
 
+
 //
 // HELPERS
 //
@@ -28,65 +40,79 @@ function defaultdict(obj, def) {
 // Chat data
 //
 
-var defChat = {
-  people: [],
-  messages: []
+var defaultRoom = {
+  keys: [],
+  maxKeys: 2,
 };
-var chats = {};
+var rooms = {};
 
 
 //
 // CONTROLLERS
 //
 
+io.on('connection', function(socket) {
+  // TODO: Use rooms...
+  var room;
+  var hasAddedKey = true;
+
+  //
+  // New message
+  //
+  socket.on('new message', function(data) {
+    socket.broadcast.emit('new message', {
+      recipient: data.recipient,
+      message: data.message,
+    });
+  });
+
+  //
+  // New user
+  //
+  socket.on('new user', function(data) {
+    socket.publicKey = data.publicKey;
+    room = defaultdict(rooms[data.roomId], defaultRoom);
+    console.log(data.roomId, room);
+    if (room.keys.length >= room.maxKeys) {
+      socket.emit('room full');
+      room = undefined;
+      return;
+    }
+    room.keys.push(data.publicKey);
+
+    console.log('emit login');
+    socket.emit('login', {
+      keys: room.keys,
+    });
+
+    console.log('emit room updated');
+    socket.broadcast.emit('room updated', {
+        keys: room.keys,
+    });
+    console.log('user joined');
+    socket.broadcast.emit('user joined');
+  });
+
+  socket.on('disconnect', function() {
+    if (room) {
+      delete room.keys[room.keys.indexOf(socket.publicKey)];
+      socket.broadcast.emit('room updated', {
+        keys: room.keys,
+      });
+      socket.broadcast.emit('user left');
+    }
+  });
+});
+
+
 //
 // Index
 //
 app.get('/', function (req, res) {
+  // TODO: Present visitors with info and possiblity to create room
   res.redirect(`/v/${uuid.v4()}`);
 });
 
-//
-// Get message
-//
-app.get('/m/:chatId', function (req, res) {
-  var chat = defaultdict(chats[req.param.chatId], defChat);
-
-  res.json(chat.messages);
-});
-
-//
-// Post message
-//
-app.post('/m/:chatId', function (req, res) {
-  var chat = defaultdict(chats[req.param.chatId], defChat);
-
-  chat.messages.push({m: req.body.message, s: req.body.publicKey});
-
-  res.json({});
-});
-
-//
-// Get chat users
-//
-app.get('/c/:chatId', function (req, res) {
-  var chat = defaultdict(chats[req.param.chatId], defChat);
-  res.json(chat.people);
-});
-
-//
-// Set chat user
-//
-app.post('/c/:chatId', function (req, res) {
-  var chat = defaultdict(chats[req.param.chatId], defChat);
-
-  if (chat.people.length <= 2) {
-    chat.people.push(req.body.publicKey);
-    res.json({});
-  } else {
-    res.status(400).json({message: 'Chat room already full.'});
-  }
-});
 
 //
 // View chat
@@ -105,9 +131,8 @@ app.get('/v/:chatId', function (req, res) {
       </div>
 
       <div class="chat-controls">
-        <form class="form-inline" id="message-form">
-          <input type="text" id="message" class="form-control message-box">
-          <button class="btn btn-default" id="postMessage">Send</button>
+        <form id="message-form">
+          <input type="text" id="message" class="form-control message-box" placeholder="Enter your message and press enter..." disabled>
         </form>
       </div>
     </div>
@@ -119,11 +144,12 @@ app.get('/v/:chatId', function (req, res) {
   res.send(body);
 });
 
-// Boot server
-var server = app.listen(3000, function () {
-  var host = server.address().address;
-  var port = server.address().port;
 
-  console.log('Example app listening at http://%s:%s', host, port);
+//
+// START UP
+//
+server.listen(config.port, function () {
+  var host = server.address().address;
+  console.log('Example app listening at http://%s:%s', host, config.port);
 });
 

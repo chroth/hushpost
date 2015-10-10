@@ -1,21 +1,43 @@
 requirejs.config({baseurl: '/js'});
 
-define(['axios.min', 'jsencrypt'],
-function(request, JSEncrypt) {
+define(['axios.min', 'jsencrypt', '/socket.io/socket.io.js'],
+function(request, JSEncrypt, io) {
+  //
   // DOM
+  //
   var chat = document.getElementById('chat');
-  var chatId = chat.getAttribute('data-chat-id');
+  var roomId = chat.getAttribute('data-chat-id');
   var form = document.getElementById('message-form');
   var messageTextBox = document.getElementById('message');
 
-  // User data
-  var user = {};
-  var recipient;
+  function addMessageToChat(msg) {
+    chat.innerText += '\n' + msg;
+    chat.scrollTop = chat.scrollHeight;
+  }
 
-  // Encryption
-  var generateKeys = function (next) {
+  function setupChatEvents() {
+    form.addEventListener('keypress', function(event) {
+      if (event.keyCode === 13) {
+        event.preventDefault();
+        postMessage(messageTextBox.value);
+        messageTextBox.value = "";
+      }
+    });
+  }
+
+  //
+  // User data
+  //
+  var socket = io();
+  var user = {};
+  var recipients = [];
+
+  //
+  // Encryption helpers
+  //
+  var generateKey = function (next) {
     var crypt = new JSEncrypt({default_key_size: 2048});
-    crypt.getKey();
+    crypt.getKey(); // Generates key
 
     next({
       privateKey: crypt.getPrivateKey(),
@@ -29,83 +51,85 @@ function(request, JSEncrypt) {
     return crypt.decrypt(message);
   };
 
-  var encryptOutgoingMessage = function(message) {
+  var encryptOutgoingMessage = function(message, recipient) {
     var crypt = new JSEncrypt();
     crypt.setPublicKey(recipient);
     return crypt.encrypt(message);
   };
 
-  // API
-  function addUser(key) {
-    user = key;
-    return request.post('/c/' + chatId, {publicKey: key.publicKey});
-  }
-
-  function getUsers(next) {
-    return request.get('/c/' + chatId);
-  }
-
+  //
+  // postMessage
+  //
   function postMessage(msg) {
-    return request.post('/m/' + chatId, {message: msg, publicKey: recipient.publicKey});
-  }
+    addMessageToChat('> ' + msg);
+    recipients.forEach(function(recipient) {
+      var message = encryptOutgoingMessage(msg, recipient);
 
-  function getMessages() {
-    return request('/m/' + chatId);
-  }
-
-  function updateMessages() {
-    getMessages()
-      .then(function(res) {
-        var messages = res.data;
-        console.log(messages);
-        chat.innerText = "";
-        messages.forEach(function(message) {
-          var txt = decryptIncomingMessage(message.m);
-          if (txt) {
-            chat.innerText += txt;
-          }
-        });
+      socket.emit('new message', {
+        recipient: recipient,
+        message: message,
       });
-  }
-
-  function getRecipient() {
-    getUsers()
-      .then(function(res) {
-        var people = res.data;
-        var recipients = people.filter(function(person) {
-          return person !== user.publicKey;
-        });
-
-        if (recipients.length > 0) {
-          recipient = recipients[0];
-          chat.innerText += "Person added chat.";
-        }
-      });
-  }
-
-  // Chat
-  function hasInitedChat() {
-    chat.innerText = 'Ready';
-    form.addEventListener('submit', function(event) {
-      event.preventDefault();
-      var message = messageTextBox.value;
-      postMessage(encryptOutgoingMessage(message))
-        .then(updateMessages);
     });
-
-    setInterval(updateMessages, 1000);
-    setInterval(getRecipient, 1000);
   }
 
-  function failedToInitChat() {
-    chat.innerText = 'Failed to init chat';
+  //
+  // updateRoom
+  //
+  function updateRoom(keys) {
+    recipients = keys.filter(function(key) {
+      return key !== user.publicKey;
+    });
   }
 
-  // Add user (self)
-  generateKeys(function(key) {
-    addUser(key)
-      .then(hasInitedChat)
-      .catch(failedToInitChat);
+  //
+  // Socket events
+  //
+  socket.on('new message', function(data) {
+    if (data.recipient === user.publicKey) {
+      var txt = decryptIncomingMessage(data.message);
+      if (txt) {
+        addMessageToChat('> ' + txt);
+      }
+    }
+  });
+
+  socket.on('room updated', function getRecipient(data) {
+    updateRoom(data.keys);
+  });
+
+  socket.on('user joined', function() {
+    addMessageToChat('A user joined room.');
+  });
+
+  socket.on('user left', function() {
+    addMessageToChat('A user left room. Please kill session.');
+  });
+
+  socket.on('login', function(data) {
+    chat.innerText = 'You joined the chat.';
+
+    updateRoom(data.keys);
+    setupChatEvents();
+  });
+
+  socket.on('room full', function() {
+    chat.innerText = 'Failed to init chat - room is full.';
+  });
+
+  //
+  // Init
+  //
+  generateKey(function(key) {
+    // Set focus on message text box.
+    messageTextBox.removeAttribute("disabled");
+    messageTextBox.select();
+    // Set user
+    user = key;
+    // Add self to room
+    socket.emit('new user', {
+      roomId: roomId,
+      publicKey: key.publicKey,
+    });
   });
 });
 
